@@ -36,7 +36,20 @@ export type CreateOpenApiNodeHttpHandlerOptions<
 > = Pick<
   NodeHTTPHandlerOptions<TRouter, TRequest, TResponse>,
   'router' | 'createContext' | 'responseMeta' | 'onError' | 'maxBodySize'
->;
+> & {
+  errorFormatter?: (opts: {
+    ctx: unknown;
+    input: unknown;
+    statusCode: number;
+    headers: Record<string, string>;
+    error: TRPCError;
+    errorShape: any;
+    /**
+     * Response `trpc-openapi` would send without this formatter.
+     */
+    defaultResponse: OpenApiErrorResponse;
+  }) => Record<string | number, unknown>;
+};
 
 export type OpenApiNextFunction = () => void;
 
@@ -54,7 +67,7 @@ export const createOpenApiNodeHttpHandler = <
     generateOpenApiDocument(router, { title: '', version: '', baseUrl: '' });
   }
 
-  const { createContext, responseMeta, onError, maxBodySize } = opts;
+  const { createContext, responseMeta, onError, maxBodySize, errorFormatter } = opts;
   const getProcedure = createProcedureCache(router);
 
   return async (req: TRequest, res: TResponse, next?: OpenApiNextFunction) => {
@@ -180,13 +193,28 @@ export const createOpenApiNodeHttpHandler = <
 
       const statusCode = meta?.status ?? TRPC_ERROR_CODE_HTTP_STATUS[error.code] ?? 500;
       const headers = meta?.headers ?? {};
-      const body: OpenApiErrorResponse = {
+
+      const defaultResponse = {
         message: isInputValidationError
           ? 'Input validation failed'
           : errorShape?.message ?? error.message ?? 'An error occurred',
         code: error.code,
         issues: isInputValidationError ? (error.cause as ZodError).errors : undefined,
       };
+
+      let body: Record<string | number, unknown> = defaultResponse;
+      if (errorFormatter) {
+        body = errorFormatter({
+          ctx,
+          input,
+          statusCode,
+          headers,
+          error,
+          errorShape,
+          defaultResponse,
+        });
+      }
+
       sendResponse(statusCode, headers, body);
     }
   };
